@@ -62,22 +62,58 @@ end
 
 -- Dropped, not narrowed: filesystem writes anywhere in the save directory
 -- (including another mod's storage), thread opens a Lua state with a full
--- standard library, system.openURL launches whatever it is handed, and event
--- lets a mod quit the game out from under the player.  Everything else LÖVE
--- exposes passes through, so a new module in a future LÖVE is available
--- without an edit here.
+-- standard library, and event lets a mod quit the game out from under the
+-- player.  love.system used to be blocked outright too -- but then wss:// dies
+-- because mods can't reach tls* (or load gen1tls themselves under the
+-- sandbox).  So system is a tiny allowlist proxy instead: getOS + tls*,
+-- nothing else.  openURL / clipboard / power / steps stay out; battery and
+-- steps already have mod.device / mod.steps.  Everything else LÖVE exposes
+-- still passes through, so a new module in a future LÖVE doesn't need an
+-- edit here.
 -- value is the replacement to name in the error, or true when there is none
 local BLOCKED_LOVE = {
   filesystem = "mod.storage, mod:read and mod:list", thread = true,
-  system = "mod.device:powerInfo() for battery information, mod.steps for "
-    .. "the step bridge", event = true,
+  event = true,
+}
+
+-- What sandboxed mods may read off love.system.  tls* is the shared dialer
+-- (Android JNI, or desktop gen1tls hung on here at boot).  getOS is just so
+-- a dialer can pick the right library name.
+local SYSTEM_ALLOW = {
+  getOS = true,
+  tlsOpen = true,
+  tlsStatus = true,
+  tlsSend = true,
+  tlsReceive = true,
+  tlsError = true,
+  tlsClose = true,
 }
 
 local loveProxy
+local systemProxy
+
+local function systemFacade()
+  if systemProxy then return systemProxy end
+  systemProxy = setmetatable({}, {
+    __index = function(_, key)
+      if not SYSTEM_ALLOW[key] then
+        error(("love.system.%s is not available to mods"):format(tostring(key)), 2)
+      end
+      local sys = _G.love and _G.love.system
+      return sys and sys[key]
+    end,
+    __newindex = function()
+      error("mods cannot assign love.system", 2)
+    end,
+  })
+  return systemProxy
+end
+
 local function loveFacade()
   if loveProxy or not _G.love then return loveProxy end
   loveProxy = setmetatable({}, {
     __index = function(_, key)
+      if key == "system" then return systemFacade() end
       local hint = BLOCKED_LOVE[key]
       if hint then
         error(("love.%s is not available to mods%s"):format(key,

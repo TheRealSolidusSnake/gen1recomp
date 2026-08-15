@@ -52,7 +52,13 @@ local PROBE = [[
 
   out.loveFilesystem = attempt(function() return love.filesystem end)
   out.loveThread = attempt(function() return love.thread end)
-  out.loveSystem = attempt(function() return love.system end)
+  -- system is allowlisted now (getOS + tls*), not a blanket refuse -- but
+  -- openURL still has to blow up.  attempt() returns false on success, so
+  -- the happy-path reads are plain.
+  out.loveSystemType = type(love.system)
+  out.loveSystemOpenURL = attempt(function() return love.system.openURL end)
+  out.loveSystemGetOS = type(love.system.getOS)
+  out.loveSystemAssign = attempt(function() love.system.tlsOpen = function() end end)
   out.loveGraphics = type(love.graphics)
   out.loveAssign = attempt(function() love.filesystem = {} end)
 
@@ -137,8 +143,13 @@ T.eq(type(out.requireSemver), "table",
 T.check(out.loveFilesystem and out.loveFilesystem:find("mod.storage", 1, true),
   "love.filesystem is refused and names the replacement")
 T.check(out.loveThread ~= false, "love.thread is refused: it opens a full Lua state")
-T.check(out.loveSystem and out.loveSystem:find("mod.device:powerInfo()", 1, true),
-  "love.system is refused and names the scoped power replacement")
+T.eq(out.loveSystemType, "table",
+  "love.system is a proxy table now, not a hard refuse")
+T.check(out.loveSystemOpenURL and out.loveSystemOpenURL:find("not available to mods", 1, true),
+  "openURL is still blocked: " .. tostring(out.loveSystemOpenURL))
+T.eq(out.loveSystemGetOS, "function",
+  "getOS is allowed so dialers can pick a library name")
+T.check(out.loveSystemAssign ~= false, "mods still can't write into love.system")
 T.eq(out.loveGraphics, "table", "the rest of love passes through")
 T.check(out.loveAssign ~= false, "a mod cannot assign into the love facade")
 
